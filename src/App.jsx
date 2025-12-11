@@ -344,7 +344,7 @@ function App() {
       <header className="mx-auto max-w-6xl pt-10">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-slate-500">Spaargids style</p>
+            <p className="text-sm uppercase tracking-[0.2em] text-slate-500">Steefware</p>
             <h1 className="mt-2 font-display text-3xl sm:text-4xl">{t.title}</h1>
             <p className="mt-2 max-w-3xl text-lg text-slate-600">{t.subtitle}</p>
           </div>
