@@ -79,7 +79,7 @@ const formatCurrency = (value, lang) =>
     maximumFractionDigits: 2,
   }).format(value);
 
-const formatPercent = (value) => `${value.toFixed(3)}%`;
+const formatPercent = (value) => `${value.toFixed(6)}%`;
 
 const addMonths = (date, months) => {
   const d = new Date(date);
@@ -296,7 +296,7 @@ const downloadCsv = (rows, lang, filename) => {
     .map((row) => [
       row.index,
       new Intl.DateTimeFormat(lang === 'nl' ? 'nl-BE' : 'en-GB').format(row.date),
-      row.rate.toFixed(5),
+      row.rate.toFixed(6),
       row.capital.toFixed(2),
       row.interest.toFixed(2),
       row.payment.toFixed(2),
