@@ -9,7 +9,7 @@ const copy = {
     language: 'Taal',
     amount: 'Leningsbedrag',
     rate: 'Rentevoet (% per jaar)',
-    duration: 'Looptijd (jaren)',
+    duration: 'Looptijd',
     type: 'Type rente',
     fixed: 'Vast',
     variable: 'Variabel',
@@ -25,6 +25,8 @@ const copy = {
     totalPaid: 'Totale terugbetaling',
     worstCase: 'Maximale maandlast (CAP)',
     bestCase: 'Minimale maandlast (FLOOR)',
+    months: 'Maanden',
+    years: 'Jaren',
     balanceTrend: 'Saldo verloop',
     breakdown: 'Jaaroverzicht (kapitaal vs rente)',
     tableMonthly: 'Maandelijkse aflossingstabel',
@@ -41,7 +43,7 @@ const copy = {
     language: 'Language',
     amount: 'Loan amount',
     rate: 'Interest rate (% yearly)',
-    duration: 'Term (years)',
+    duration: 'Term',
     type: 'Rate type',
     fixed: 'Fixed',
     variable: 'Variable',
@@ -57,6 +59,8 @@ const copy = {
     totalPaid: 'Total repayment',
     worstCase: 'Max monthly (CAP)',
     bestCase: 'Min monthly (FLOOR)',
+    months: 'Months',
+    years: 'Years',
     balanceTrend: 'Balance trend',
     breakdown: 'Yearly breakdown (principal vs interest)',
     tableMonthly: 'Monthly amortization table',
@@ -75,7 +79,7 @@ const formatCurrency = (value, lang) =>
     maximumFractionDigits: 2,
   }).format(value);
 
-const formatPercent = (value) => `${value.toFixed(2)}%`;
+const formatPercent = (value) => `${value.toFixed(3)}%`;
 
 const addMonths = (date, months) => {
   const d = new Date(date);
@@ -83,18 +87,23 @@ const addMonths = (date, months) => {
   return d;
 };
 
+const round2 = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const monthlyRateFromAnnual = (annualRatePct) => (1 + annualRatePct / 100) ** (1 / 12) - 1;
+
 const computePayment = (principal, periodRate, periods) => {
-  if (periodRate === 0) return principal / periods;
+  if (periodRate === 0) return round2(principal / periods);
   const factor = (1 + periodRate) ** periods;
-  return (principal * periodRate * factor) / (factor - 1);
+  return round2((principal * periodRate * factor) / (factor - 1));
 };
 
 const validate = (values, lang) => {
   const errors = {};
   const t = copy[lang];
+  const durationMax = values.durationUnit === 'months' ? 600 : 50;
   if (values.amount < 1000 || values.amount > 5000000) errors.amount = `${t.amount} ≥ 1.000 en ≤ 5.000.000`;
   if (values.rate < 0 || values.rate > 20) errors.rate = `${t.rate} tussen 0% en 20%`;
-  if (values.duration < 1 || values.duration > 50) errors.duration = `${t.duration} tussen 1 en 50`;
+  if (values.duration < 1 || values.duration > durationMax) errors.duration = `${t.duration} tussen 1 en ${durationMax}`;
   if (values.type === 'variable') {
     if (values.cap && values.cap < values.rate) errors.cap = 'CAP moet ≥ rente zijn';
     if (values.cap && values.cap > 30) errors.cap = 'CAP maximaal 30%';
@@ -110,12 +119,16 @@ const validate = (values, lang) => {
 
 const calculateLoan = (values) => {
   const principal = Number(values.amount);
-  const months = values.duration * 12;
-  const baseMonthlyRate = (values.rate / 100) / 12;
+  const months = values.durationUnit === 'months' ? values.duration : values.duration * 12;
+  const baseMonthlyRate = monthlyRateFromAnnual(values.rate);
   const monthlyPayment = computePayment(principal, baseMonthlyRate, months);
 
-  const capRate = values.type === 'variable' ? (values.cap ? values.cap / 100 / 12 : baseMonthlyRate) : baseMonthlyRate;
-  const floorRate = values.type === 'variable' ? (values.floor ? values.floor / 100 / 12 : baseMonthlyRate) : baseMonthlyRate;
+  const capRate = values.type === 'variable'
+    ? monthlyRateFromAnnual(values.cap ?? values.rate)
+    : baseMonthlyRate;
+  const floorRate = values.type === 'variable'
+    ? monthlyRateFromAnnual(values.floor ?? values.rate)
+    : baseMonthlyRate;
   const maxMonthly = computePayment(principal, capRate, months);
   const minMonthly = computePayment(principal, floorRate, months);
 
@@ -123,25 +136,31 @@ const calculateLoan = (values) => {
   const schedule = [];
   for (let i = 0; i < months; i += 1) {
     const periodRate = baseMonthlyRate;
-    const interest = balance * periodRate;
-    let capital = monthlyPayment - interest;
+    let interest = round2(balance * periodRate);
+    let capital = round2(monthlyPayment - interest);
+    let payment = monthlyPayment;
     if (i === months - 1) {
       // Adjust last payment to clear rounding residue.
-      capital = balance;
+      capital = round2(balance);
+      interest = round2(balance * periodRate);
+      payment = round2(capital + interest);
+      balance = 0;
+    } else {
+      balance = round2(balance - capital);
     }
-    balance = Math.max(0, balance - capital);
     schedule.push({
       index: i + 1,
       date: addMonths(values.startDate, i),
-      rate: periodRate * 12 * 100,
+      rate: periodRate * 100,
       capital: capital,
       interest,
-      payment: capital + interest,
+      payment,
       balance,
     });
   }
 
-  const totalInterest = schedule.reduce((sum, row) => sum + row.interest, 0);
+  const totalInterest = round2(schedule.reduce((sum, row) => sum + row.interest, 0));
+  const totalPaid = round2(schedule.reduce((sum, row) => sum + row.payment, 0));
   const yearly = schedule.reduce((acc, row) => {
     const year = row.date.getFullYear();
     if (!acc[year]) {
@@ -154,9 +173,9 @@ const calculateLoan = (values) => {
         endDate: row.date,
       };
     }
-    acc[year].capital += row.capital;
-    acc[year].interest += row.interest;
-    acc[year].payment += row.payment;
+    acc[year].capital = round2(acc[year].capital + row.capital);
+    acc[year].interest = round2(acc[year].interest + row.interest);
+    acc[year].payment = round2(acc[year].payment + row.payment);
     acc[year].endBalance = row.balance;
     acc[year].endDate = row.date;
     return acc;
@@ -165,7 +184,7 @@ const calculateLoan = (values) => {
   return {
     monthlyPayment,
     totalInterest,
-    totalPaid: monthlyPayment * months,
+    totalPaid,
     schedule,
     yearly: Object.values(yearly).sort((a, b) => a.year - b.year),
     minMonthly,
@@ -277,7 +296,7 @@ const downloadCsv = (rows, lang, filename) => {
     .map((row) => [
       row.index,
       new Intl.DateTimeFormat(lang === 'nl' ? 'nl-BE' : 'en-GB').format(row.date),
-      row.rate.toFixed(3),
+      row.rate.toFixed(5),
       row.capital.toFixed(2),
       row.interest.toFixed(2),
       row.payment.toFixed(2),
@@ -299,6 +318,7 @@ function App() {
     amount: 250000,
     rate: 3,
     duration: 25,
+    durationUnit: 'years',
     type: 'fixed',
     cap: 5,
     floor: 1,
@@ -373,7 +393,7 @@ function App() {
             <div className="space-y-2">
               <label className="flex items-center justify-between text-sm font-medium">
                 {t.amount}
-                <span className="text-xs text-slate-500">€1.000 – €5.000.000</span>
+                <span className="text-xs text-slate-500">1.000 - 5.000.000</span>
               </label>
               <input
                 name="amount"
@@ -393,7 +413,7 @@ function App() {
             <div className="space-y-2">
               <label className="flex items-center justify-between text-sm font-medium">
                 {t.rate}
-                <span className="text-xs text-slate-500">0 – 20%</span>
+                <span className="text-xs text-slate-500">0 - 20%</span>
               </label>
               <input
                 name="rate"
@@ -413,19 +433,32 @@ function App() {
             <div className="space-y-2">
               <label className="flex items-center justify-between text-sm font-medium">
                 {t.duration}
-                <span className="text-xs text-slate-500">1 – 50 {lang === 'nl' ? 'jaar' : 'years'}</span>
+                <span className="text-xs text-slate-500">
+                  1 - {form.durationUnit === 'years' ? '50' : '600'} {form.durationUnit === 'years' ? (lang === 'nl' ? 'jaar' : 'years') : (lang === 'nl' ? 'maanden' : 'months')}
+                </span>
               </label>
-              <input
-                name="duration"
-                type="number"
-                min="1"
-                max="50"
-                value={form.duration}
-                onChange={onChange}
-                className={`w-full rounded-xl border px-3 py-2 text-base shadow-inner transition focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 ${
-                  errors.duration ? 'border-red-400' : 'border-slate-200'
-                }`}
-              />
+              <div className="flex gap-2">
+                <input
+                  name="duration"
+                  type="number"
+                  min="1"
+                  max={form.durationUnit === 'years' ? '50' : '600'}
+                  value={form.duration}
+                  onChange={onChange}
+                  className={`w-full rounded-xl border px-3 py-2 text-base shadow-inner transition focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 ${
+                    errors.duration ? 'border-red-400' : 'border-slate-200'
+                  }`}
+                />
+                <select
+                  name="durationUnit"
+                  value={form.durationUnit}
+                  onChange={onChange}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-base shadow-inner transition focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="years">{t.years}</option>
+                  <option value="months">{t.months}</option>
+                </select>
+              </div>
               {errors.duration ? <p className="text-xs text-red-500">{errors.duration}</p> : null}
             </div>
 
